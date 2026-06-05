@@ -139,7 +139,7 @@ EXCLUSIONES_COMPUESTAS = [
     'nivel local', 'peso chileno', 'valor público', 'propiedades dinámicas', 'modelos propuestos',
     'crecimiento anual', 'resultados experimentales', 'pesos chilenos', 'caso particular',
     'escenario descrito', 'decisiones estratégicas', 'decisiones tácticas', 'decisiones informadas',
-    'datos experimentales', 'contexto actual', 'análisis interno',
+    'datos experimentales', 'contexto actual', 'análisis interno', 'datos disponibles',
 
     # --- Relleno Corporativo / Jargon de Gestión ---
     'sector publico', 'sector público', 'sector privado', 'sector industrial',
@@ -153,7 +153,7 @@ EXCLUSIONES_COMPUESTAS = [
     'desafio critico', 'desafío crítico', 'desafio significativo', 'gran impacto', 'mejores resultados',
     'análisis comparativo', 'análisis exhaustivo', 'resultados positivos', 'quinto año', 'cuarto año',
     'análisis detallado', 'futuras mejoras', 'capacidad instalada', 'resultado obtenido',
-    'alta calidad', 'público objetivo', 'audiencia objetivo',
+    'alta calidad', 'público objetivo', 'audiencia objetivo', 'impacto significativo',
 
 
     # --- Filtro de Regiones Chilenas ---
@@ -794,98 +794,13 @@ def generar_html_universal(bd_actual):
         f.write(html_template)
     print("\n✨ ¡ÉXITO! HTML estable con Arial generado para Magnolia.")
 
-
-def generar_base_datos_prueba(cantidad=350):
-    """
-    Genera un diccionario sintético que simula perfectamente la base de datos
-    de tesis reales de la FCFM para pruebas locales.
-    """
-    print(f"🎲 Generando {cantidad} registros de prueba artificiales...")
-    
-    # Repositorio de variables realistas de la FCFM
-    estructuras_titulo = [
-        "Optimización de {recurso} mediante {tecnica} en Chile",
-        "Análisis estructural de {recurso} usando {tecnica}",
-        "Diseño e implementación de un sistema basado en {tecnica} para {recurso}",
-        "Evaluación del impacto de {recurso} en el ecosistema usando {tecnica}",
-        "Modelamiento matemático de {recurso} aplicado a {tecnica}"
-    ]
-    
-    recursos = [
-        "redes eléctricas inteligentes", "cuencas hidrográficas en el norte", 
-        "algoritmos de machine learning", "estructuras antisísmicas", 
-        "procesos metalúrgicos", "redes de transporte urbano", 
-        "datos astronómicos masivos", "sistemas autónomos de drones"
-    ]
-    
-    tecnicas = [
-        "aprendizaje profundo", "modelos estocásticos", "inteligencia artificial",
-        "analítica de datos", "aisladores elastoméricos", "algoritmos genéticos",
-        "procesamiento de lenguaje natural", "simulaciones de Montecarlo"
-    ]
-    
-    # Palabras clave para simular la sección de "Metadatos"
-    # ¡Ojo! Incluimos las palabras prohibidas a propósito para testear el filtro
-    palabras_clave_pool = [
-        "inteligencia artificial", "minería de datos", "optimización", "redes neuronales", 
-        "cambio climático", "energías renovables", "sistemas de control", "aprendizaje profundo",
-        "of the system", "presente trabajo", "este estudio", "the power grid", "ingeniería industrial"
-    ]
-    
-    # Párrafos base para simular la extracción de "Texto Completo"
-    parrafos_pool = [
-        "En el presente trabajo se analiza rigurosamente el comportamiento de la infraestructura. El diseño de este estudio abarca la optimización de recursos energéticos.",
-        "This thesis presents a comprehensive study of the main components of the system. We evaluate the performance and efficiency of the neural network.",
-        "El objetivo principal de esta investigación es proponer un modelo predictivo eficiente para mitigar fallas operacionales en la industria minera chilena.",
-        "Se presenta un marco metodológico avanzado enfocado en resolver problemas complejos de asignación de recursos mediante analítica de datos a gran escala."
-    ]
-    
-    anios_pool = [str(anio) for anio in range(2016, 2027)] # Abarca hasta el actual 2026
-    grados_pool = ["Pregrado", "Postgrado"]
-    origenes_pool = ["Metadatos", "Texto Completo"]
-    
-    bd_sintetica = {}
-    
-    for i in range(cantidad):
-        # Generar una URL única correlativa
-        url = f"https://repositorio.uchile.cl/handle/2250/test_mock_{1000 + i}"
-        
-        # Armar un título aleatorio pero coherente
-        titulo = random.choice(estructuras_titulo).format(
-            recurso=random.choice(recursos),
-            tecnica=random.choice(tecnicas)
-        ) + f" (Caso de Estudio #{i})"
-        
-        origen = random.choice(origenes_pool)
-        anio = random.choice(anios_pool)
-        grado = random.choice(grados_pool)
-        
-        # Simular el campo 'texto' según su origen
-        if origen == "Metadatos":
-            # Formato clásico de palabras clave separadas por punto y coma
-            texto = "; ".join(random.sample(palabras_clave_pool, k=random.randint(2, 4)))
-        else:
-            # Texto descriptivo largo
-            texto = random.choice(parrafos_pool) + f" Datos adicionales de la muestra número {i}."
-            
-        bd_sintetica[url] = {
-            "texto": texto,
-            "origen": origen,
-            "anio": anio,
-            "grado": grado,
-            "titulo": titulo
-        }
-        
-    print("✅ Base de datos de prueba creada con éxito.")
-    return bd_sintetica
-
 # ==============================================================================
 # EJECUCIÓN PRINCIPAL
 # ==============================================================================
 # ==========================================
 #  ⚙️ CONFIGURACIÓN DEL SCRIPT
 # ==========================================
-MODO_PRUEBA = True # 💡 Ponlo en True para diseñar/probar. En False para producción.
+MODO_PRUEBA = False # 💡 Ponlo en True para diseñar/probar. En False para producción.
 
 if __name__ == "__main__":
     
