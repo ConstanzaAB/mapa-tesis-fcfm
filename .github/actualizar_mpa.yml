@@ -2,9 +2,12 @@ name: Actualizacion Automatica de Tesis FCFM
 
 on:
   schedule:
-    # Corre automáticamente todos los lunes a las 08:00 AM UTC (Ajustable)
+    # Corre automáticamente todos los lunes a las 08:00 AM UTC
     - cron: '0 8 * * 1'
-  workflow_dispatch: # Te permite hacer clic en un botón en GitHub para actualizar manualmente cuando quieras
+  workflow_dispatch: # Permite actualizar manualmente desde el botón de GitHub
+
+permissions: # 🟢 CRÍTICO: Da permisos a GitHub para guardar la BD y actualizar la Web
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -21,15 +24,24 @@ jobs:
     - name: 📦 Instalar dependencias del proyecto
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         python -m spacy download es_core_news_sm
+        python -m spacy download en_core_web_sm # 🟢 NUEVO: Descarga el modelo en inglés para evitar que falle el NLP
 
     - name: 🧠 Ejecutar minería de datos y NLP
-      run: python mi_script.py
+      run: python build_map.py # Asegúrate de que tu archivo se llame así exactamente
+
+    - name: 💾 Guardar base de datos actualizada en el repositorio
+      run: |
+        git config --global user.name "GitHub Action Bot"
+        git config --global user.email "action@github.com"
+        git add bd_tesis.json
+        # Comprueba si hay cambios en el JSON; si los hay, los guarda permanentemente
+        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 BD Actualizada automáticamente por el Scraper" && git push)
 
     - name: 🚀 Publicar nueva versión en GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
+      uses: peaceiris/actions-gh-pages@v4 # 🟢 ACTUALIZADO: Usamos la v4 que es más estable
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: . # Sube el archivo resultado_fcfm.html generado
+        publish_dir: . # Sube los archivos para la web
         keep_files: true

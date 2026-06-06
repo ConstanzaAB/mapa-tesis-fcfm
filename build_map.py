@@ -5,10 +5,11 @@ import spacy
 from collections import defaultdict
 import time
 import unicodedata
-import random
 import os
 from langdetect import detect, DetectorFactory
 import spacy
+from datetime import datetime
+import time
 
 
 # ==============================================================================
@@ -16,6 +17,7 @@ import spacy
 # ==============================================================================
 DB_FILE = "bd_tesis.json"  
 LIMITE_NUEVAS = 2000      
+MAX_PAG_VACIAS = 5
 
 URL_PREGRADO = "https://repositorio.uchile.cl/handle/2250/100026/browse?type=dateissued&sort_by=2&order=DESC"
 URL_POSTGRADO = "https://repositorio.uchile.cl/handle/2250/100027/browse?type=dateissued&sort_by=2&order=DESC"
@@ -311,16 +313,19 @@ def obtener_urls_pendientes(bd_actual):
     fuentes = [("Pregrado", URL_PREGRADO), ("Postgrado", URL_POSTGRADO)]
     
     for tipo, url_base in fuentes:
-        print(f"🤖 Escaneando repositorio buscando nuevas tesis de {tipo}...")
+        print(f"\n🤖 Escaneando repositorio buscando nuevas tesis de {tipo}...")
         offset = 0
+        
         while True:
             separador = "&" if "?" in url_base else "?"
             url_pagina = f"{url_base}{separador}offset={offset}"
             try:
-                response = requests.get(url_pagina, headers=headers, timeout=15)
+                response = requests.get(url_pagina, headers=headers, timeout=20)
                 if response.status_code != 200: break
+                
                 soup = BeautifulSoup(response.text, 'html.parser')
                 tesis_en_esta_pagina = 0
+                nuevas_en_esta_pagina = 0 # ⚡ NUEVO: Contador para esta página específica
                 
                 for a in soup.find_all('a', href=True):
                     href = a['href']
@@ -328,15 +333,31 @@ def obtener_urls_pendientes(bd_actual):
                         tesis_en_esta_pagina += 1
                         url_completa = BASE_URL + href if href.startswith('/') else href
                         
+                        # Si es una tesis que NO está en nuestra base de datos
                         if url_completa not in bd_actual and url_completa not in enlaces_pendientes[tipo]:
                             enlaces_pendientes[tipo].append(url_completa)
+                            nuevas_en_esta_pagina += 1 # Es nueva 
                             if len(enlaces_pendientes[tipo]) >= LIMITE_NUEVAS: break
                             
                 if len(enlaces_pendientes[tipo]) >= LIMITE_NUEVAS: break
                 if tesis_en_esta_pagina == 0: break
                 
+                # 🎯 LÓGICA DE TOLERANCIA INTELIGENTE:
+                if tesis_en_esta_pagina > 0 and nuevas_en_esta_pagina == 0:
+                    paginas_vacias_consecutivas += 1
+                    print(f"   ⚠️ Página con offset {offset} no traía novedades. ({paginas_vacias_consecutivas}/{MAX_PAG_VACIAS} de tolerancia)")
+                else:
+                    # Si la página traía al menos una tesis nueva, reiniciamos el contador de paciencia
+                    if nuevas_en_esta_pagina > 0:
+                        paginas_vacias_consecutivas = 0
+                
+                # Si alcanzamos el límite de páginas vacías seguidas, rompemos el ciclo de verdad
+                if paginas_vacias_consecutivas >= MAX_PAG_VACIAS:
+                    print(f"   🏁 Historial alcanzado de forma segura ({MAX_PAG_VACIAS} páginas seguidas sin novedades). Deteniendo escaneo.")
+                    break
+                
                 offset += 20
-                time.sleep(0.1) 
+                time.sleep(0.5) 
             except Exception:
                 break
         print(f"   ✅ Se encontraron {len(enlaces_pendientes[tipo])} URLs nuevas para descargar.")
@@ -354,17 +375,25 @@ def minar_y_actualizar_bd(enlaces_pendientes, bd_actual):
         for i, url in enumerate(lista_urls):
             try:
                 res = requests.get(f"{url}?show=full", headers=headers, timeout=10)
-                if res.status_code != 200: continue
+                if res.status_code != 200: 
+                    continue
+                    
                 inner_soup = BeautifulSoup(res.text, 'html.parser')
                 palabras_clave_ficha = []
                 resumen_texto = ""
                 
+                # 1. Extraer metadatos básicos (Año y Título)
                 meta_issued = inner_soup.find("meta", {"name": "DC.date.issued"}) or inner_soup.find("meta", {"name": "DCTERMS.issued"})
                 anio_real = meta_issued["content"].strip()[:4] if meta_issued and meta_issued.get("content") else "Desconocido"
                 
                 meta_title = inner_soup.find("meta", {"name": "DC.title"}) or inner_soup.find("meta", {"name": "DCTERMS.title"})
                 titulo_real = meta_title["content"].strip() if meta_title and meta_title.get("content") else "Tesis sin título"
                 
+                # 2. ⚡ NUEVO: Detectar si la tesis está bajo acceso embargado
+                contenido_html_minusculas = res.text.lower()
+                es_embargada = "acceso embargado" in contenido_html_minusculas or "embargoed" in contenido_html_minusculas
+                
+                # 3. Intentar extraer palabras clave y resúmenes si es que existen
                 for fila in inner_soup.find_all('tr'):
                     celdas = fila.find_all(['td', 'th'])
                     if len(celdas) >= 3:
@@ -376,26 +405,57 @@ def minar_y_actualizar_bd(enlaces_pendientes, bd_actual):
                         elif campo_interno.startswith('dc.description.abstract'):
                             resumen_texto = valor_real
                 
+                guardada_exitosamente = False
+                
+                # 4. Lógica de guardado definitiva
                 if palabras_clave_ficha:
                     bd_actual[url] = {"texto": " . ".join(palabras_clave_ficha), "origen": "Metadatos", "anio": anio_real, "grado": grado, "titulo": titulo_real}
                     nuevas_agregadas += 1
+                    guardada_exitosamente = True
                 elif resumen_texto:
                     bd_actual[url] = {"texto": resumen_texto, "origen": "Resumen", "anio": anio_real, "grado": grado, "titulo": titulo_real}
                     nuevas_agregadas += 1
+                    guardada_exitosamente = True
+                elif titulo_real != "Tesis sin título":
+                    # 🎉 RED DE SEGURIDAD: Si no hay keywords, ni resumen, pero SÍ hay un título real, la salvamos.
+                    stopwords = {'de', 'la', 'el', 'en', 'para', 'y', 'los', 'las', 'un', 'una', 'con', 'del', 'al', 'sobre', 'sus', 'por', 'a', 'o', 'e', 'u'}
+                    titulo_limpio = titulo_real.lower().replace(':', '').replace('(', '').replace(')', '').replace(',', '')
+                    palabras = titulo_limpio.split()
+                    
+                    palabras_clave_titulo = [p for p in palabras if p not in stopwords and len(p) > 2]
+                    texto_fallback = " . ".join(palabras_clave_titulo) if palabras_clave_titulo else "Documento sin datos textuales"
+                    
+                    # Identificamos si fue por embargo o simplemente porque los datos estaban en blanco
+                    etiqueta_origen = "Embargado (Título)" if es_embargada else "Solo Título (Faltan Metadatos)"
+                        
+                    bd_actual[url] = {
+                        "texto": texto_fallback, 
+                        "origen": etiqueta_origen, 
+                        "anio": anio_real, 
+                        "grado": grado, 
+                        "titulo": titulo_real
+                    }
+                    nuevas_agregadas += 1
+                    guardada_exitosamente = True
+                    print(f"   🛟 Rescatada ({etiqueta_origen}): '{titulo_real[:40]}...'")
+                else:
+                    # Únicamente se ignorará si el título es literalmente "Tesis sin título"
+                    print(f"   👻 Ignorada (Enlace fantasma): {url}")
                 
+                # Barra de progreso real
                 if (i + 1) % 50 == 0 or (i + 1) == limite:
-                    print(f"   📊 Descargadas {i + 1} de {limite}...")
+                    print(f"   📊 Procesadas {i + 1}/{limite} | Guardadas con éxito en esta tanda: {nuevas_agregadas}")
                     guardar_base_datos(bd_actual) 
                     
-                time.sleep(0.3) 
+                time.sleep(0.4) 
             except Exception:
                 continue
                 
     if nuevas_agregadas > 0:
         guardar_base_datos(bd_actual)
-        print(f"💾 Base de datos actualizada: {nuevas_agregadas} tesis nuevas guardadas permanentemente.")
+        print(f"\n💾 Base de datos actualizada: {nuevas_agregadas} tesis nuevas guardadas permanentemente.")
     else:
-        print("ℹ️ No se descargaron tesis nuevas en esta ejecución.")
+        print("\nℹ️ No se descargaron tesis nuevas en esta ejecución.")
         
     return bd_actual
 
@@ -463,7 +523,7 @@ def generar_html_universal(bd_actual):
             for termino in texto.replace(';', ',').replace('.', ',').split(','):
                 if not termino.strip(): continue
                 for sub_c in procesar_keyword_compuesto(termino.strip()):
-                    sub_c_clean = sub_c.strip().lower()
+                    sub_c_clean = sub_c.strip().lower().strip(".,[]()\"';:-+/*_¿?¡! ")
                     if es_concepto_valido(sub_c_clean) and sub_c_clean not in FRASES_PROHIBIDAS:
                         if not any(any(c.isdigit() for c in p) and len(p) <= 5 for p in sub_c_clean.split()):
                             # Escudo 2: NORMALIZACIÓN MANUAL INSTANTÁNEA
@@ -577,9 +637,11 @@ def generar_html_universal(bd_actual):
             #wordcloud-container svg { width: 100%; height: 100%; display: block; }
         </style>
         
-        <div style="text-align: center; margin-bottom: 25px;">
+        div style="text-align: center; margin-bottom: 25px;">
             <h2 style="color: #0f172a; margin-top: 0; margin-bottom: 5px; font-size: clamp(24px, 4vw, 32px); font-weight: bold; letter-spacing: -1px;">Analizador Semántico de Tesis FCFM</h2>
-            <h3 style="color: #3b82f6; margin-top: 0; margin-bottom: 20px; font-size: clamp(11px, 2vw, 14px); font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Universidad de Chile</h3>
+            <h3 style="color: #3b82f6; margin-top: 0; margin-bottom: 15px; font-size: clamp(11px, 2vw, 14px); font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Universidad de Chile</h3>
+            
+            <p style="color: #64748b; font-size: 12px; margin-top: -10px; margin-bottom: 20px; font-family: Arial, sans-serif;">🔄 Última sincronización: <span style="color: #0f172a; font-weight: bold;">__FECHA_ACTUALIZACION__</span></p>
             
             <div class="botones-container">
                 <button class="tab-btn" onclick="cambiarGrado('Ambos', this)" style="background: #3b82f6; color: white;">🎓 Todos los Grados</button>
@@ -788,10 +850,13 @@ def generar_html_universal(bd_actual):
         </script>
     </div>"""
 
-    html_template = html_template.replace("__JSON_MAESTRO__", json_maestro).replace("__JSON_ANIOS__", json_anios)
+    fecha_hoy = datetime.now().strftime("%d/%m/%Y %H:%M")
+    html_final = html_template.replace("__JSON_MAESTRO__", json_maestro)\
+                               .replace("__JSON_ANIOS__", json_anios)\
+                               .replace("__FECHA_ACTUALIZACION__", fecha_hoy)
 
-    with open("resultado_fcfm.html", "w", encoding="utf-8") as f:
-        f.write(html_template)
+    with open("mapa.html", "w", encoding="utf-8") as f:
+        f.write(html_final)
     print("\n✨ ¡ÉXITO! HTML estable con Arial generado para Magnolia.")
 
 # ==============================================================================
