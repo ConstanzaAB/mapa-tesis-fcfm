@@ -1,5 +1,5 @@
 import requests
-from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 import json
 import spacy
 from collections import defaultdict
@@ -7,29 +7,27 @@ import time
 import unicodedata
 import os
 from langdetect import detect, DetectorFactory
-import spacy
-from datetime import datetime
-import time
-
+from datetime import datetime, timedelta
 
 # ==============================================================================
 # CONFIGURACIÓN DEL SISTEMA Y BASE DE DATOS
 # ==============================================================================
 DB_FILE = "bd_tesis.json"  
-LIMITE_NUEVAS = 2000      
-MAX_PAG_VACIAS = 5
 
-URL_PREGRADO = "https://repositorio.uchile.cl/handle/2250/100026/browse?type=dateissued&sort_by=2&order=DESC"
-URL_POSTGRADO = "https://repositorio.uchile.cl/handle/2250/100027/browse?type=dateissued&sort_by=2&order=DESC"
-BASE_URL = "https://repositorio.uchile.cl"
+# URL de la base de datos cruda de la U. de Chile (OAI-PMH)
+OAI_URL = "https://repositorio.uchile.cl/oai/request"
+
+# Diccionarios de lectura de XML
+NAMESPACES = {
+    'oai': 'http://www.openarchives.org/OAI/2.0/',
+    'oai_dc': 'http://www.openarchives.org/OAI/2.0/oai_dc/',
+    'dc': 'http://purl.org/dc/elements/1.1/'
+}
 
 # ==============================================================================
-# DICCIONARIOS DE EXCLUSIÓN
+# DICCIONARIOS DE EXCLUSIÓN (Tus filtros se mantienen INTACTOS)
 # ==============================================================================
 
-# =========================================================================
-# 🛑 EXCLUSIONES ESPECÍFICAS PARA EL INGLÉS (Papers, abstracts y keywords)
-# =========================================================================
 EXCLUSIONES_INGLES = [
     'study', 'analysis', 'research', 'development', 'objective', 'result',
     'university', 'engineering', 'science', 'design', 'implementation', 
@@ -44,9 +42,6 @@ EXCLUSIONES_INGLES = [
     'main objective'
 ]
 
-# =========================================================================
-# 🛑 EXCLUSIONES SIMPLES (Español - Plurales)
-# =========================================================================
 EXCLUSIONES_SIMPLES = [
     'tesis', 'estudio', 'estudios', 'análisis', 'investigación', 'investigaciones', 
     'desarrollo', 'desarrollos', 'objetivo', 'objetivos', 'e', 'resultado', 'resultados', 
@@ -80,14 +75,8 @@ EXCLUSIONES_SIMPLES = [
     'serena', 'coquimbo'
 ]
 
-# =========================================================================
-# 🛑 EXCLUSIONES COMPUESTAS (Español - Plurales)
-# =========================================================================
 EXCLUSIONES_COMPUESTAS = [
-    # --- Zonas y Geografía Genérica ---
     'zona norte', 'zona centro', 'zona sur', 'zona central', 'cordillera costa',
-    
-    # --- Solicitadas por el usuario ---
     'necesidad especifica', 'necesidades especificas', 'necesidad específica', 'necesidades específicas',
     'costos asociados', 'costo asociado', 'costos operativos', 'costo operativo', 
     'costos operacionales', 'costo operacional', 'costos totales', 'costo total',
@@ -108,8 +97,6 @@ EXCLUSIONES_COMPUESTAS = [
     'alta calidad', 'mejora continua', 'mejoras continuas', 'empresa chilena', 'empresas chilenas', 'desarrollo sostenible',
     'sostenibilidad ambiental', 'sostenibilidad económica', 'mercado potencial', 'mercado objetivo',
     'alta precisión', 'alta demanda', 'potenciales clientes', 'alto potencial',
-
-    # --- Jerga de Estructura de Tesis e Investigación ---
     'toma decisiones', 'toma de decisiones', 'revision bibliografica', 'revisión bibliográfica',
     'conclusiones generales', 'conclusion general', 'conclusiones finales', 'conclusion final',
     'futuras investigaciones', 'futura investigacion', 'futuros estudios', 'futuro estudio',
@@ -142,8 +129,6 @@ EXCLUSIONES_COMPUESTAS = [
     'crecimiento anual', 'resultados experimentales', 'pesos chilenos', 'caso particular',
     'escenario descrito', 'decisiones estratégicas', 'decisiones tácticas', 'decisiones informadas',
     'datos experimentales', 'contexto actual', 'análisis interno', 'datos disponibles',
-
-    # --- Relleno Corporativo / Jargon de Gestión ---
     'sector publico', 'sector público', 'sector privado', 'sector industrial',
     'ventaja competitiva', 'ventajas competitivas', 'mejora continua', 'largo plazo', 
     'corto plazo', 'mediano plazo', 'vida util', 'vida útil', 'gran importancia',
@@ -156,28 +141,19 @@ EXCLUSIONES_COMPUESTAS = [
     'análisis comparativo', 'análisis exhaustivo', 'resultados positivos', 'quinto año', 'cuarto año',
     'análisis detallado', 'futuras mejoras', 'capacidad instalada', 'resultado obtenido',
     'alta calidad', 'público objetivo', 'audiencia objetivo', 'impacto significativo',
-
-
-    # --- Filtro de Regiones Chilenas ---
     'region metropolitana', 'región metropolitana', 'region valparaiso', 'región valparaíso',
     'region antofagasta', 'región antofagasta', 'region biobio', 'región bío bío', 
     'region coquimbo', 'región coquimbo', 'region atacama', 'región de atacama', 
     'region tarapaca', 'región tarapacá', 'region araucania', 'región araucanía', 
     'region lago', 'región lago', 'region rio', 'región río', 'region magallanes', 
     'región magallanes', 'region aysen', 'región aysén', 'region maule', 'región maule', 
-    'region o higgins', 'region arica', 'region nuble', 'región ñuble', 'santiago', 'chile',
-
-    #-- Zonas y Geografía Genérica ---
-    'zona norte', 'zona centro', 'zona sur', 'zona central', 'cordillera costa',
+    'region o higgins', 'region arica', 'region nuble', 'región ñuble', 'santiago', 'chile'
 ]
 
 NORMALIZADOR_MANUAL = {
-    # Estos a singular porque suenan bien:
     "modelos matemáticos": "modelo matemático",
     "evaluaciones de impacto": "evaluacion de impacto",
     "modelos predictivos": "modelo predictivo",
-
-    # Estos a plural porque son la convención del rubro:
     "red neuronal": "redes neuronales", 
     "base de datos": "bases de datos" 
 }
@@ -200,23 +176,14 @@ def es_concepto_valido(concepto):
     t_clean = concepto.strip().lower()
     if len(t_clean) <= 3 or t_clean.isdigit(): return False
     
-    # =========================================================================
-    # 🇨🇱 FILTRO ANTI-GEOGRAFÍA SOLITARIA
-    # =========================================================================
-    # Si el concepto está hecho SÓLO por combinaciones de estas palabras, se elimina.
-    # Si trae cualquier otra palabra ("Recursos", "Hídricos", "Simulación"), se conserva.
     geografia_solitaria = {
         'santiago', 'chile', 'region', 'región', 'metropolitana', 
         'central', 'zona', 'norte', 'sur'
     }
     palabras_concepto = set(t_clean.split())
     
-    if palabras_concepto.issubset(geografia_solitaria):
-        return False # Se descarta porque es solo ruido geográfico aislado
-        
-    # Filtros tradicionales por lista de exclusión
-    if t_clean in EXCLUSIONES_SIMPLES or t_clean in EXCLUSIONES_INGLES or t_clean in EXCLUSIONES_COMPUESTAS:
-        return False
+    if palabras_concepto.issubset(geografia_solitaria): return False 
+    if t_clean in EXCLUSIONES_SIMPLES or t_clean in EXCLUSIONES_INGLES or t_clean in EXCLUSIONES_COMPUESTAS: return False
 
     if "rapa nui" in t_clean or "isla de pascua" in t_clean:
         if t_clean in ["geografia de rapa nui", "geografía de rapa nui"]: return True 
@@ -224,20 +191,11 @@ def es_concepto_valido(concepto):
         
     return True
 
-def es_enlace_tesis(href):
-    if '?' in href or '#' in href: return False
-    partes = [p for p in href.split('/') if p]
-    if len(partes) == 3 and partes[0] == 'handle':
-        if partes[2] in ["100026", "100027"]: return False
-        return True
-    return False
-
 def formatear_titulo_profesional(texto):
     conectores = {"de", "del", "a", "al", "en", "y", "o", "u", "e", "con", "por", "para", 
                   "sin", "sobre", "tras", "la", "las", "el", "los", "un", "una", "unos", "unas",
                   "of", "the", "and", "in", "to", "for", "with", "on", "at", "by", "from", "a", "an"}
     
-    # 🎯 DICCIONARIO DE ACRÓNIMOS (Forzamos a que salgan en mayúscula)
     acronimos = {
         "er": "ER", "ia": "IA", "fcfm": "FCFM", "sql": "SQL", 
         "api": "API", "rna": "RNA", "svm": "SVM", "ti": "TI", "it": "IT"
@@ -249,19 +207,10 @@ def formatear_titulo_profesional(texto):
     resultado = []
     for i, palabra in enumerate(palabras):
         p_clean = palabra.lower()
-        
-        # 1. Si es un acrónimo conocido, lo ponemos en mayúscula sin importar su posición
-        if p_clean in acronimos:
-            resultado.append(acronimos[p_clean])
-        # 2. Si es la primera palabra, siempre va capitalizada
-        elif i == 0: 
-            resultado.append(palabra.capitalize())
-        # 3. Si es un conector intermedio, se queda en minúscula
-        elif p_clean in conectores: 
-            resultado.append(p_clean)
-        # 4. El resto de palabras se capitalizan normal
-        else: 
-            resultado.append(palabra.capitalize())
+        if p_clean in acronimos: resultado.append(acronimos[p_clean])
+        elif i == 0: resultado.append(palabra.capitalize())
+        elif p_clean in conectores: resultado.append(p_clean)
+        else: resultado.append(palabra.capitalize())
             
     return " ".join(resultado)
 
@@ -285,184 +234,149 @@ def procesar_keyword_compuesto(texto_keyword):
     return conceptos_puros
 
 def limpiar_superposiciones(lista_conceptos):
-    """
-    Recibe una lista de conceptos de UNA tesis y elimina los que son 
-    subcadenas redundantes de otros más largos.
-    Ejemplo: ['inteligencia artificial', 'inteligencia'] -> ['inteligencia artificial']
-    """
-    # 1. Ordenamos de mayor a menor longitud (los más largos primero)
     conceptos_ordenados = sorted(list(set(lista_conceptos)), key=len, reverse=True)
     conceptos_limpios = []
-    
     for concepto in conceptos_ordenados:
-        # Verificamos si este concepto ya está contenido en alguno de los más largos
         es_subcadena = any(f" {concepto} " in f" {largo} " for largo in conceptos_limpios)
-        
-        if not es_subcadena:
-            conceptos_limpios.append(concepto)
-            
+        if not es_subcadena: conceptos_limpios.append(concepto)
     return conceptos_limpios
 
+
 # ==============================================================================
-# MOTORES DE EXTRACCIÓN INCREMENTAL
+# 🚀 NUEVO MOTOR DE EXTRACCIÓN INCREMENTAL (OAI-PMH)
 # ==============================================================================
 
-def obtener_urls_pendientes(bd_actual):
-    enlaces_pendientes = {"Pregrado": [], "Postgrado": []}
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    fuentes = [("Pregrado", URL_PREGRADO), ("Postgrado", URL_POSTGRADO)]
+def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
+    """
+    Se conecta al servidor OAI-PMH y pide SÓLO las tesis agregadas en los últimos 'X' días.
+    Es muchísimo más rápido y no corre riesgos de bloqueo.
+    """
+    # Calculamos la fecha desde la cual queremos buscar novedades
+    fecha_desde = (datetime.now() - timedelta(days=dias_atras)).strftime('%Y-%m-%d')
+    print(f"\n📡 [OAI-PMH] Buscando tesis nuevas subidas desde el {fecha_desde}...")
     
-    for tipo, url_base in fuentes:
-        print(f"\n🤖 Escaneando repositorio buscando nuevas tesis de {tipo}...")
-        offset = 0
-        
-        while True:
-            separador = "&" if "?" in url_base else "?"
-            url_pagina = f"{url_base}{separador}offset={offset}"
-            try:
-                response = requests.get(url_pagina, headers=headers, timeout=20)
-                if response.status_code != 200: break
-                
-                soup = BeautifulSoup(response.text, 'html.parser')
-                tesis_en_esta_pagina = 0
-                nuevas_en_esta_pagina = 0 # ⚡ NUEVO: Contador para esta página específica
-                
-                for a in soup.find_all('a', href=True):
-                    href = a['href']
-                    if es_enlace_tesis(href):
-                        tesis_en_esta_pagina += 1
-                        url_completa = BASE_URL + href if href.startswith('/') else href
-                        
-                        # Si es una tesis que NO está en nuestra base de datos
-                        if url_completa not in bd_actual and url_completa not in enlaces_pendientes[tipo]:
-                            enlaces_pendientes[tipo].append(url_completa)
-                            nuevas_en_esta_pagina += 1 # Es nueva 
-                            if len(enlaces_pendientes[tipo]) >= LIMITE_NUEVAS: break
-                            
-                if len(enlaces_pendientes[tipo]) >= LIMITE_NUEVAS: break
-                if tesis_en_esta_pagina == 0: break
-                
-                # 🎯 LÓGICA DE TOLERANCIA INTELIGENTE:
-                if tesis_en_esta_pagina > 0 and nuevas_en_esta_pagina == 0:
-                    paginas_vacias_consecutivas += 1
-                    print(f"   ⚠️ Página con offset {offset} no traía novedades. ({paginas_vacias_consecutivas}/{MAX_PAG_VACIAS} de tolerancia)")
-                else:
-                    # Si la página traía al menos una tesis nueva, reiniciamos el contador de paciencia
-                    if nuevas_en_esta_pagina > 0:
-                        paginas_vacias_consecutivas = 0
-                
-                # Si alcanzamos el límite de páginas vacías seguidas, rompemos el ciclo de verdad
-                if paginas_vacias_consecutivas >= MAX_PAG_VACIAS:
-                    print(f"   🏁 Historial alcanzado de forma segura ({MAX_PAG_VACIAS} páginas seguidas sin novedades). Deteniendo escaneo.")
-                    break
-                
-                offset += 20
-                time.sleep(0.5) 
-            except Exception:
-                break
-        print(f"   ✅ Se encontraron {len(enlaces_pendientes[tipo])} URLs nuevas para descargar.")
-    return enlaces_pendientes
-
-def minar_y_actualizar_bd(enlaces_pendientes, bd_actual):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    params = {
+        "verb": "ListRecords", 
+        "metadataPrefix": "oai_dc",
+        "from": fecha_desde
+    }
+    
     nuevas_agregadas = 0
     
-    for grado, lista_urls in enlaces_pendientes.items():
-        limite = len(lista_urls)
-        if limite == 0: continue
-        print(f"\n🕵️‍♂️ Extrayendo datos profundos para {grado} ({limite} tesis nuevas)...")
-        
-        for i, url in enumerate(lista_urls):
-            try:
-                res = requests.get(f"{url}?show=full", headers=headers, timeout=10)
-                if res.status_code != 200: 
-                    continue
-                    
-                inner_soup = BeautifulSoup(res.text, 'html.parser')
-                palabras_clave_ficha = []
-                resumen_texto = ""
-                
-                # 1. Extraer metadatos básicos (Año y Título)
-                meta_issued = inner_soup.find("meta", {"name": "DC.date.issued"}) or inner_soup.find("meta", {"name": "DCTERMS.issued"})
-                anio_real = meta_issued["content"].strip()[:4] if meta_issued and meta_issued.get("content") else "Desconocido"
-                
-                meta_title = inner_soup.find("meta", {"name": "DC.title"}) or inner_soup.find("meta", {"name": "DCTERMS.title"})
-                titulo_real = meta_title["content"].strip() if meta_title and meta_title.get("content") else "Tesis sin título"
-                
-                # 2. ⚡ NUEVO: Detectar si la tesis está bajo acceso embargado
-                contenido_html_minusculas = res.text.lower()
-                es_embargada = "acceso embargado" in contenido_html_minusculas or "embargoed" in contenido_html_minusculas
-                
-                # 3. Intentar extraer palabras clave y resúmenes si es que existen
-                for fila in inner_soup.find_all('tr'):
-                    celdas = fila.find_all(['td', 'th'])
-                    if len(celdas) >= 3:
-                        campo_interno = celdas[1].get_text().strip().lower()
-                        texto_celda = celdas[2].get_text().replace('\n', ' ').strip()
-                        valor_real = unicodedata.normalize('NFC', texto_celda)
-                        if campo_interno.startswith('dc.subject'):
-                            palabras_clave_ficha.append(valor_real)
-                        elif campo_interno.startswith('dc.description.abstract'):
-                            resumen_texto = valor_real
-                
-                guardada_exitosamente = False
-                
-                # 4. Lógica de guardado definitiva
-                if palabras_clave_ficha:
-                    bd_actual[url] = {"texto": " . ".join(palabras_clave_ficha), "origen": "Metadatos", "anio": anio_real, "grado": grado, "titulo": titulo_real}
-                    nuevas_agregadas += 1
-                    guardada_exitosamente = True
-                elif resumen_texto:
-                    bd_actual[url] = {"texto": resumen_texto, "origen": "Resumen", "anio": anio_real, "grado": grado, "titulo": titulo_real}
-                    nuevas_agregadas += 1
-                    guardada_exitosamente = True
-                elif titulo_real != "Tesis sin título":
-                    # 🎉 RED DE SEGURIDAD: Si no hay keywords, ni resumen, pero SÍ hay un título real, la salvamos.
-                    stopwords = {'de', 'la', 'el', 'en', 'para', 'y', 'los', 'las', 'un', 'una', 'con', 'del', 'al', 'sobre', 'sus', 'por', 'a', 'o', 'e', 'u'}
-                    titulo_limpio = titulo_real.lower().replace(':', '').replace('(', '').replace(')', '').replace(',', '')
-                    palabras = titulo_limpio.split()
-                    
-                    palabras_clave_titulo = [p for p in palabras if p not in stopwords and len(p) > 2]
-                    texto_fallback = " . ".join(palabras_clave_titulo) if palabras_clave_titulo else "Documento sin datos textuales"
-                    
-                    # Identificamos si fue por embargo o simplemente porque los datos estaban en blanco
-                    etiqueta_origen = "Embargado (Título)" if es_embargada else "Solo Título (Faltan Metadatos)"
-                        
-                    bd_actual[url] = {
-                        "texto": texto_fallback, 
-                        "origen": etiqueta_origen, 
-                        "anio": anio_real, 
-                        "grado": grado, 
-                        "titulo": titulo_real
-                    }
-                    nuevas_agregadas += 1
-                    guardada_exitosamente = True
-                    print(f"   🛟 Rescatada ({etiqueta_origen}): '{titulo_real[:40]}...'")
-                else:
-                    # Únicamente se ignorará si el título es literalmente "Tesis sin título"
-                    print(f"   👻 Ignorada (Enlace fantasma): {url}")
-                
-                # Barra de progreso real
-                if (i + 1) % 50 == 0 or (i + 1) == limite:
-                    print(f"   📊 Procesadas {i + 1}/{limite} | Guardadas con éxito en esta tanda: {nuevas_agregadas}")
-                    guardar_base_datos(bd_actual) 
-                    
-                time.sleep(0.4) 
-            except Exception:
+    while True:
+        try:
+            response = requests.get(OAI_URL, params=params, timeout=30)
+            if response.status_code != 200:
+                print(f"⚠️ Servidor saturado (Error {response.status_code}). Pausa 5 seg...")
+                time.sleep(5)
                 continue
                 
+            root = ET.fromstring(response.content)
+            records = root.findall('.//oai:record', NAMESPACES)
+            
+            for record in records:
+                # Omitir si fue borrada
+                header = record.find('oai:header', NAMESPACES)
+                if header is not None and header.get('status') == 'deleted': continue
+                    
+                metadata = record.find('.//oai_dc:dc', NAMESPACES)
+                if metadata is None: continue
+                
+                # A. Buscar el enlace (handle)
+                url = None
+                for identifier in metadata.findall('dc:identifier', NAMESPACES):
+                    if identifier.text and "handle/2250/" in identifier.text:
+                        url = identifier.text.strip()
+                        break
+                        
+                # 🛡️ ESCUDO: Si ya existe en la BD local, la ignoramos al instante
+                if not url or url in bd_actual: continue
+                
+                # B. Filtro: ¿Es Tesis? y ¿De qué Grado?
+                es_tesis = False
+                grado_estimado = "Tesis"
+                for tipo in metadata.findall('dc:type', NAMESPACES):
+                    if tipo.text:
+                        tipo_txt = tipo.text.lower()
+                        if "tesis" in tipo_txt or "memoria" in tipo_txt:
+                            es_tesis = True
+                            if "magíster" in tipo_txt or "doctorado" in tipo_txt:
+                                grado_estimado = "Postgrado"
+                            elif "civil" in tipo_txt or "licenciatura" in tipo_txt or "título" in tipo_txt:
+                                grado_estimado = "Pregrado"
+                
+                if not es_tesis: continue 
+                
+                # C. Extraer los datos crudos
+                titulo_node = metadata.find('dc:title', NAMESPACES)
+                titulo = titulo_node.text.strip() if titulo_node is not None and titulo_node.text else "Tesis sin título"
+                
+                anio_node = metadata.find('dc:date', NAMESPACES)
+                anio = anio_node.text[:4] if anio_node is not None and anio_node.text else "Desconocido"
+                
+                resumen = ""
+                for desc in metadata.findall('dc:description', NAMESPACES):
+                    if desc.text and len(desc.text) > 40: 
+                        resumen = desc.text.strip()
+                        break
+                        
+                palabras_clave = [subj.text.strip() for subj in metadata.findall('dc:subject', NAMESPACES) if subj.text]
+                
+                es_embargada = False
+                for rights in metadata.findall('dc:rights', NAMESPACES):
+                    if rights.text and ("embargo" in rights.text.lower() or "restringido" in rights.text.lower()):
+                        es_embargada = True
+                
+                # D. Lógica de guardado seguro
+                texto_final = ""
+                origen = ""
+                
+                if palabras_clave:
+                    texto_final = " . ".join(palabras_clave)
+                    origen = "Metadatos"
+                elif resumen:
+                    texto_final = resumen
+                    origen = "Resumen"
+                elif es_embargada or titulo != "Tesis sin título":
+                    stopwords = {'de', 'la', 'el', 'en', 'para', 'y', 'los', 'las', 'un', 'una', 'con', 'del', 'al', 'sobre', 'sus', 'por', 'a', 'o', 'e', 'u'}
+                    titulo_limpio = titulo.lower().replace(':', '').replace('(', '').replace(')', '').replace(',', '')
+                    pal_titulo = [p for p in titulo_limpio.split() if p not in stopwords and len(p) > 2]
+                    texto_final = " . ".join(pal_titulo) if pal_titulo else "Documento sin datos textuales"
+                    origen = "Embargada (Título)" if es_embargada else "Solo Título"
+                
+                if texto_final:
+                    bd_actual[url] = {
+                        "texto": texto_final,
+                        "origen": origen,
+                        "anio": anio,
+                        "grado": grado_estimado,
+                        "titulo": titulo
+                    }
+                    nuevas_agregadas += 1
+            
+            # Paginación OAI (si es que hubo muchas tesis subidas esta semana)
+            resumption_token_node = root.find('.//oai:resumptionToken', NAMESPACES)
+            if resumption_token_node is not None and resumption_token_node.text:
+                params = {"verb": "ListRecords", "resumptionToken": resumption_token_node.text}
+            else:
+                break # Terminamos de leer todas las novedades
+                
+        except Exception as e:
+            print(f"❌ Error al conectar con OAI-PMH: {e}")
+            break
+            
     if nuevas_agregadas > 0:
         guardar_base_datos(bd_actual)
-        print(f"\n💾 Base de datos actualizada: {nuevas_agregadas} tesis nuevas guardadas permanentemente.")
+        print(f"💾 Se descargaron y agregaron {nuevas_agregadas} tesis nuevas a la base de datos.")
     else:
-        print("\nℹ️ No se descargaron tesis nuevas en esta ejecución.")
+        print("ℹ️ No se encontraron tesis nuevas en estos últimos días.")
         
     return bd_actual
+
 
 # ==============================================================================
 # PIPELINE NLP E INYECCIÓN DE HTML 
 # ==============================================================================
-# Fijamos la semilla de langdetect para que las clasificaciones sean deterministas
 DetectorFactory.seed = 0
 
 def generar_html_universal(bd_actual):
@@ -480,16 +394,12 @@ def generar_html_universal(bd_actual):
         print("   python -m spacy download en_core_web_sm")
         return
 
-    # =========================================================================
-    # 🛑 FILTROS GLOBALES DE SEGURIDAD (Se aplican post-procesamiento)
-    # =========================================================================
     FRASES_PROHIBIDAS = {
         'presente trabajo', 'este trabajo', 'la presente', 'presente estudio', 
         'este estudio', 'el presente', 'this thesis', 'this study', 'the present',
         'universidad chile', 'universidad de chile' 
     }
 
-    # Estructura unificada final
     estructura_maestra = {
         "Pregrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "links": {}}),
         "Postgrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "links": {}}),
@@ -503,7 +413,6 @@ def generar_html_universal(bd_actual):
             estructura_maestra[g][concepto]["anios"][anio] += 1
             estructura_maestra[g][concepto]["links"][link] = {"anio": anio, "titulo": titulo}
 
-    # Bolsas de procesamiento separadas por idioma
     textos_es, metadatos_es = [], []
     textos_en, metadatos_en = [], []
 
@@ -515,10 +424,13 @@ def generar_html_universal(bd_actual):
         grado = info["grado"]
         titulo = info["titulo"]
         
+        # 🛡️ PARCHE DE SEGURIDAD: Corrige los datos que ya se guardaron mal en el JSON
+        if grado not in ["Pregrado", "Postgrado"]:
+            grado = "Pregrado"
+            
         if anio != "Desconocido": anios_detectados.add(anio)
 
-        if origen == "Metadatos":
-            # 1️⃣ CAMBIO EN METADATOS: Agrupamos por tesis antes de inyectar
+        if origen == "Metadatos" or "OAI" in origen:
             conceptos_tesis = []
             for termino in texto.replace(';', ',').replace('.', ',').split(','):
                 if not termino.strip(): continue
@@ -526,13 +438,10 @@ def generar_html_universal(bd_actual):
                     sub_c_clean = sub_c.strip().lower().strip(".,[]()\"';:-+/*_¿?¡! ")
                     if es_concepto_valido(sub_c_clean) and sub_c_clean not in FRASES_PROHIBIDAS:
                         if not any(any(c.isdigit() for c in p) and len(p) <= 5 for p in sub_c_clean.split()):
-                            # Escudo 2: NORMALIZACIÓN MANUAL INSTANTÁNEA
-                            # Si la palabra está en nuestro diccionario, la reemplazamos por su valor
                             if sub_c_clean in NORMALIZADOR_MANUAL:
                                 sub_c_clean = NORMALIZADOR_MANUAL[sub_c_clean]
                             conceptos_tesis.append(sub_c_clean)
             
-            # Limpiamos superposiciones de las palabras clave de esta tesis
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
                 inyectar_relacion(grado, formatear_titulo_profesional(comp), anio, url, titulo)
@@ -549,12 +458,11 @@ def generar_html_universal(bd_actual):
                 textos_es.append(texto)
                 metadatos_es.append({"link": url, "anio": anio, "grado": grado, "titulo": titulo})
 
-    # 🇪🇸 2️⃣ CAMBIO EN PIPELINE EN ESPAÑOL: Limpieza por documento
     if textos_es:
         print(f"   • Procesando {len(textos_es)} textos en Español...")
         for idx, doc in enumerate(nlp_es.pipe(textos_es, batch_size=50, disable=["ner"])):
             meta = metadatos_es[idx]
-            conceptos_tesis = [] # Bolsa temporal para esta tesis
+            conceptos_tesis = [] 
             
             for chunk in doc.noun_chunks:
                 tokens = []
@@ -562,8 +470,6 @@ def generar_html_universal(bd_actual):
                     token_limpio = t.text.lower().strip(".,[]()\"';:-+/*_¿?¡! ")
                     if any(c.isdigit() for c in token_limpio) and len(token_limpio) <= 5: continue
                     if (not t.is_stop and len(token_limpio) > 1 and t.pos_ in ['NOUN', 'ADJ', 'PROPN']):
-                        # Escudo 2: NORMALIZACIÓN MANUAL INSTANTÁNEA
-                        # Si la palabra está en nuestro diccionario, la reemplazamos por su valor
                         if token_limpio in NORMALIZADOR_MANUAL:
                             token_limpio = NORMALIZADOR_MANUAL[token_limpio]
                         tokens.append(token_limpio)
@@ -571,23 +477,19 @@ def generar_html_universal(bd_actual):
                 if 2 <= len(tokens) <= 4:
                     compuesto = " ".join(tokens)
                     if es_concepto_valido(compuesto) and compuesto not in FRASES_PROHIBIDAS:
-                        # Escudo 2: NORMALIZACIÓN MANUAL INSTANTÁNEA
-                        # Si la palabra está en nuestro diccionario, la reemplazamos por su valor
                         if compuesto in NORMALIZADOR_MANUAL:
                             compuesto = NORMALIZADOR_MANUAL[compuesto]
                         conceptos_tesis.append(compuesto)
             
-            # Filtramos palabras repetidas o contenidas en frases más largas para ESTA tesis
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
                 inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["link"], meta["titulo"])
 
-    # 🇬🇧 3️⃣ CAMBIO EN PIPELINE EN INGLÉS: Limpieza por documento
     if textos_en:
         print(f"   • Procesando {len(textos_en)} textos en Inglés...")
         for idx, doc in enumerate(nlp_en.pipe(textos_en, batch_size=50, disable=["ner"])):
             meta = metadatos_en[idx]
-            conceptos_tesis = [] # Bolsa temporal para esta tesis inglesa
+            conceptos_tesis = [] 
             
             for chunk in doc.noun_chunks:
                 tokens = []
@@ -602,18 +504,14 @@ def generar_html_universal(bd_actual):
                     if es_concepto_valido(compuesto) and compuesto not in FRASES_PROHIBIDAS:
                         conceptos_tesis.append(compuesto)
             
-            # Filtramos superposiciones
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
                 inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["link"], meta["titulo"])
 
-    # =========================================================================
-    # GENERACIÓN DEL HTML (Mismo template estable con Arial que ya tienes)
-    # =========================================================================
+    # Generación de HTML
     json_maestro = json.dumps(estructura_maestra, ensure_ascii=False)
     json_anios = json.dumps(sorted(list(anios_detectados), reverse=True))
 
-    # ⚡ FUENTE CAMBIADA A ARIAL/SANS-SERIF EN TODO EL TEMPLATE
     html_template = """<div style="padding: 40px 30px; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border-radius: 20px; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); margin: 30px auto; width: 100%; max-width: 950px; font-family: Arial, Helvetica, sans-serif; box-sizing: border-box;">
         <style>
             .botones-container { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; flex-wrap: wrap; }
@@ -637,7 +535,7 @@ def generar_html_universal(bd_actual):
             #wordcloud-container svg { width: 100%; height: 100%; display: block; }
         </style>
         
-        div style="text-align: center; margin-bottom: 25px;">
+        <div style="text-align: center; margin-bottom: 25px;">
             <h2 style="color: #0f172a; margin-top: 0; margin-bottom: 5px; font-size: clamp(24px, 4vw, 32px); font-weight: bold; letter-spacing: -1px;">Analizador Semántico de Tesis FCFM</h2>
             <h3 style="color: #3b82f6; margin-top: 0; margin-bottom: 15px; font-size: clamp(11px, 2vw, 14px); font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Universidad de Chile</h3>
             
@@ -681,7 +579,6 @@ def generar_html_universal(bd_actual):
         <script>
         setTimeout(function() {
             try {
-                console.log("WordCloud: Iniciando motor JS...");
                 var datosMaestros = __JSON_MAESTRO__;
                 var aniosDisponibles = __JSON_ANIOS__;
                 var gradoActual = "Ambos"; 
@@ -719,15 +616,12 @@ def generar_html_universal(bd_actual):
                 }
 
                 function procesarYRenderizar() {
-                    console.log("WordCloud: Procesando grado: " + gradoActual);
                     var container = document.getElementById('wordcloud-container');
                     var anioSel = selectorAnio.value;
                     var limite = parseInt(document.getElementById('filto-palabras').value);
                     var diccionarioContexto = datosMaestros[gradoActual];
                     
-                    // ESCUDO PROTECTOR
                     if (!diccionarioContexto) {
-                        console.error("WordCloud: ERROR CRÍTICO. No se encontraron datos en el JSON para la categoría: " + gradoActual);
                         d3.select("#wordcloud-container").html("");
                         d3.select("#wordcloud-container").append("p")
                             .style("color", "#94a3b8").style("text-align", "center").style("font-family", "Arial, sans-serif")
@@ -753,7 +647,6 @@ def generar_html_universal(bd_actual):
 
                     dataset.sort((a,b) => b.size - a.size);
                     dataset = dataset.slice(0, limite);
-                    console.log("WordCloud: Palabras filtradas para renderizar: " + dataset.length);
 
                     d3.select("#wordcloud-container").html("");
                     if(dataset.length === 0) {
@@ -770,7 +663,6 @@ def generar_html_universal(bd_actual):
                         d.fontSizeCalculado = maxVal === minVal ? 24 : 12 + ((d.size - minVal) / (maxVal - minVal)) * 36;
                     });
 
-                    // CONFIGURACIÓN CORREGIDA CON fontWeight("bold")
                     var layout = d3.layout.cloud()
                         .size([internalWidth, internalHeight])
                         .words(dataset)
@@ -784,7 +676,6 @@ def generar_html_universal(bd_actual):
                     layout.start();
 
                     function draw(words) {
-                        console.log("WordCloud: Dibujando SVG...");
                         var svg = d3.select("#wordcloud-container").append("svg")
                             .attr("viewBox", "0 0 " + internalWidth + " " + internalHeight)
                             .attr("preserveAspectRatio", "xMidYMid meet")
@@ -862,30 +753,21 @@ def generar_html_universal(bd_actual):
 # ==============================================================================
 # EJECUCIÓN PRINCIPAL
 # ==============================================================================
-# ==========================================
-#  ⚙️ CONFIGURACIÓN DEL SCRIPT
-# ==========================================
-MODO_PRUEBA = False # 💡 Ponlo en True para diseñar/probar. En False para producción.
+MODO_PRUEBA = False 
 
 if __name__ == "__main__":
-    
     if not MODO_PRUEBA:
-        print("🌐 [MODO PRODUCCIÓN] Buscando nuevos links y extrayendo información de internet...")
-        print("📁 Cargando base de datos local...")
+        print("🌐 [MODO PRODUCCIÓN] Ejecutando sincronización mediante OAI-PMH...")
         bd_actual = cargar_base_datos()
         print(f"✅ Se encontraron {len(bd_actual)} tesis ya procesadas en tu registro.")
 
-        urls_nuevas = obtener_urls_pendientes(bd_actual)
-        bd_actual = minar_y_actualizar_bd(urls_nuevas, bd_actual)
+        # Llama a la nueva función. Por defecto, busca tesis de los últimos 14 días.
+        bd_actual = actualizar_bd_oai_incremental(bd_actual, dias_atras=14)
         generar_html_universal(bd_actual)
     else:
         print("📂 [MODO PRUEBA] ¡Extracción web saltada! Cargando copia local guardada para ahorrar tiempo...")
-        # Aquí simplemente lees el JSON que ya generaste ayer o en ejecuciones pasadas
         bd_actual = cargar_base_datos()
         if not bd_actual:
             print("❌ No tienes un JSON local guardado. Debes ejecutar MODO_PRUEBA=False al menos una vez.")
             bd_actual = {}
-        #bd_actual = generar_base_datos_prueba(cantidad=1000)  # Genera datos de prueba sintéticos
-
-    # Llamamos a la función del HTML pasándole el modo prueba
-    generar_html_universal(bd_actual)
+        generar_html_universal(bd_actual)
