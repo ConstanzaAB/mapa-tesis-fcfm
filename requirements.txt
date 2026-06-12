@@ -1,0 +1,4 @@
+requests
+spacy
+langdetect
+click
