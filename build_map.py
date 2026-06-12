@@ -247,11 +247,6 @@ def limpiar_superposiciones(lista_conceptos):
 # ==============================================================================
 
 def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
-    """
-    Se conecta al servidor OAI-PMH y pide SÓLO las tesis agregadas en los últimos 'X' días.
-    Es muchísimo más rápido y no corre riesgos de bloqueo.
-    """
-    # Calculamos la fecha desde la cual queremos buscar novedades
     fecha_desde = (datetime.now() - timedelta(days=dias_atras)).strftime('%Y-%m-%d')
     print(f"\n📡 [OAI-PMH] Buscando tesis nuevas subidas desde el {fecha_desde}...")
     
@@ -275,26 +270,22 @@ def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
             records = root.findall('.//oai:record', NAMESPACES)
             
             for record in records:
-                # Omitir si fue borrada
                 header = record.find('oai:header', NAMESPACES)
                 if header is not None and header.get('status') == 'deleted': continue
                     
                 metadata = record.find('.//oai_dc:dc', NAMESPACES)
                 if metadata is None: continue
                 
-                # A. Buscar el enlace (handle)
                 url = None
                 for identifier in metadata.findall('dc:identifier', NAMESPACES):
                     if identifier.text and "handle/2250/" in identifier.text:
                         url = identifier.text.strip()
                         break
                         
-                # 🛡️ ESCUDO: Si ya existe en la BD local, la ignoramos al instante
                 if not url or url in bd_actual: continue
                 
-                # B. Filtro: ¿Es Tesis? y ¿De qué Grado?
                 es_tesis = False
-                grado_estimado = "Tesis"
+                grado_estimado = "Pregrado"
                 for tipo in metadata.findall('dc:type', NAMESPACES):
                     if tipo.text:
                         tipo_txt = tipo.text.lower()
@@ -307,7 +298,6 @@ def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
                 
                 if not es_tesis: continue 
                 
-                # C. Extraer los datos crudos
                 titulo_node = metadata.find('dc:title', NAMESPACES)
                 titulo = titulo_node.text.strip() if titulo_node is not None and titulo_node.text else "Tesis sin título"
                 
@@ -327,7 +317,6 @@ def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
                     if rights.text and ("embargo" in rights.text.lower() or "restringido" in rights.text.lower()):
                         es_embargada = True
                 
-                # D. Lógica de guardado seguro
                 texto_final = ""
                 origen = ""
                 
@@ -354,12 +343,11 @@ def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
                     }
                     nuevas_agregadas += 1
             
-            # Paginación OAI (si es que hubo muchas tesis subidas esta semana)
             resumption_token_node = root.find('.//oai:resumptionToken', NAMESPACES)
             if resumption_token_node is not None and resumption_token_node.text:
                 params = {"verb": "ListRecords", "resumptionToken": resumption_token_node.text}
             else:
-                break # Terminamos de leer todas las novedades
+                break 
                 
         except Exception as e:
             print(f"❌ Error al conectar con OAI-PMH: {e}")
@@ -400,31 +388,38 @@ def generar_html_universal(bd_actual):
         'universidad chile', 'universidad de chile' 
     }
 
+    # 🚀 AQUI ESTA LA MAGIA DE LA DIETA RELACIONAL
     estructura_maestra = {
-        "Pregrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "links": {}}),
-        "Postgrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "links": {}}),
-        "Ambos": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "links": {}})
+        "Pregrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "ids": []}),
+        "Postgrado": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "ids": []}),
+        "Ambos": defaultdict(lambda: {"frecuencia_total": 0, "anios": defaultdict(int), "ids": []})
     }
     anios_detectados = set()
+    
+    catalogo_tesis = {}
+    url_to_id = {}
+    id_actual = 0
 
-    def inyectar_relacion(grado, concepto, anio, link, titulo):
+    def inyectar_relacion(grado, concepto, anio, tesis_id):
         for g in [grado, "Ambos"]:
             estructura_maestra[g][concepto]["frecuencia_total"] += 1
             estructura_maestra[g][concepto]["anios"][anio] += 1
-            estructura_maestra[g][concepto]["links"][link] = {"anio": anio, "titulo": titulo}
+            estructura_maestra[g][concepto]["ids"].append(tesis_id)
 
     textos_es, metadatos_es = [], []
     textos_en, metadatos_en = [], []
 
-    print(f"   • Clasificando documentos por idioma...")
+    print(f"   • Clasificando documentos y creando Catálogo Relacional...")
     for url, info in bd_actual.items():
+        id_actual += 1
+        url_to_id[url] = id_actual
+        catalogo_tesis[id_actual] = {"u": url, "t": info["titulo"], "a": info["anio"]}
+        
         texto = info["texto"]
         origen = info["origen"]
         anio = info["anio"]
         grado = info["grado"]
-        titulo = info["titulo"]
         
-        # 🛡️ PARCHE DE SEGURIDAD: Corrige los datos que ya se guardaron mal en el JSON
         if grado not in ["Pregrado", "Postgrado"]:
             grado = "Pregrado"
             
@@ -444,7 +439,7 @@ def generar_html_universal(bd_actual):
             
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
-                inyectar_relacion(grado, formatear_titulo_profesional(comp), anio, url, titulo)
+                inyectar_relacion(grado, formatear_titulo_profesional(comp), anio, id_actual)
         else:
             try:
                 idioma = detect(texto)
@@ -453,10 +448,10 @@ def generar_html_universal(bd_actual):
             
             if idioma == "en":
                 textos_en.append(texto)
-                metadatos_en.append({"link": url, "anio": anio, "grado": grado, "titulo": titulo})
+                metadatos_en.append({"tesis_id": id_actual, "anio": anio, "grado": grado})
             else:
                 textos_es.append(texto)
-                metadatos_es.append({"link": url, "anio": anio, "grado": grado, "titulo": titulo})
+                metadatos_es.append({"tesis_id": id_actual, "anio": anio, "grado": grado})
 
     if textos_es:
         print(f"   • Procesando {len(textos_es)} textos en Español...")
@@ -483,7 +478,7 @@ def generar_html_universal(bd_actual):
             
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
-                inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["link"], meta["titulo"])
+                inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["tesis_id"])
 
     if textos_en:
         print(f"   • Procesando {len(textos_en)} textos en Inglés...")
@@ -506,10 +501,11 @@ def generar_html_universal(bd_actual):
             
             conceptos_limpios = limpiar_superposiciones(conceptos_tesis)
             for comp in conceptos_limpios:
-                inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["link"], meta["titulo"])
+                inyectar_relacion(meta["grado"], formatear_titulo_profesional(comp), meta["anio"], meta["tesis_id"])
 
-    # Generación de HTML
+    # Generación de HTML ultra ligero
     json_maestro = json.dumps(estructura_maestra, ensure_ascii=False)
+    json_catalogo = json.dumps(catalogo_tesis, ensure_ascii=False)
     json_anios = json.dumps(sorted(list(anios_detectados), reverse=True))
 
     html_template = """<div style="padding: 40px 30px; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border-radius: 20px; box-shadow: 0 20px 40px -10px rgba(0,0,0,0.1); margin: 30px auto; width: 100%; max-width: 950px; font-family: Arial, Helvetica, sans-serif; box-sizing: border-box;">
@@ -580,6 +576,7 @@ def generar_html_universal(bd_actual):
         setTimeout(function() {
             try {
                 var datosMaestros = __JSON_MAESTRO__;
+                var catalogoTesis = __JSON_CATALOGO__;
                 var aniosDisponibles = __JSON_ANIOS__;
                 var gradoActual = "Ambos"; 
                 
@@ -701,10 +698,18 @@ def generar_html_universal(bd_actual):
                     document.getElementById('concepto-seleccionado').innerText = palabra + " (" + gradoActual + ")";
                     var ul = document.getElementById('lista-links'); ul.innerHTML = "";
 
-                    for (var url in info.links) {
-                        var objDatos = info.links[url];
-                        var anioLink = objDatos.anio;
-                        var tituloTesis = objDatos.titulo;
+                    var idsFiltrados = info.ids || [];
+                    // Eliminar duplicados en caso de que una tesis repitiera el concepto
+                    idsFiltrados = [...new Set(idsFiltrados)];
+                    
+                    for (var i = 0; i < idsFiltrados.length; i++) {
+                        var idTesis = idsFiltrados[i];
+                        var objDatos = catalogoTesis[idTesis];
+                        if (!objDatos) continue;
+
+                        var url = objDatos.u;
+                        var tituloTesis = objDatos.t;
+                        var anioLink = objDatos.a;
                         var anioInt = parseInt(anioLink);
                         var mostrar = false;
                         
@@ -743,12 +748,13 @@ def generar_html_universal(bd_actual):
 
     fecha_hoy = datetime.now().strftime("%d/%m/%Y %H:%M")
     html_final = html_template.replace("__JSON_MAESTRO__", json_maestro)\
+                               .replace("__JSON_CATALOGO__", json_catalogo)\
                                .replace("__JSON_ANIOS__", json_anios)\
                                .replace("__FECHA_ACTUALIZACION__", fecha_hoy)
 
     with open("mapa.html", "w", encoding="utf-8") as f:
         f.write(html_final)
-    print("\n✨ ¡ÉXITO! HTML estable con Arial generado para Magnolia.")
+    print("\n✨ ¡ÉXITO! HTML estable y ULTRA LIGERO generado para Magnolia.")
 
 # ==============================================================================
 # EJECUCIÓN PRINCIPAL
