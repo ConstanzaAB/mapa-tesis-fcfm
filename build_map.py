@@ -155,7 +155,13 @@ NORMALIZADOR_MANUAL = {
     "evaluaciones de impacto": "evaluacion de impacto",
     "modelos predictivos": "modelo predictivo",
     "red neuronal": "redes neuronales", 
-    "base de datos": "bases de datos" 
+    "base de datos": "bases de datos",
+    "análisis estructural (ingenieria": "análisis estructural",
+    "redes neuronales (ciencia de la computación": "redes neuronales",  
+    "redes neuronales ciencia de la computación": "redes neuronales",
+    "Análisis estructural (ingeniería": "análisis estructural",
+    "Redes neuronales (ciencia de la Computación": "redes neuronales",  
+    "Redes neuronales ciencia de la Computación": "redes neuronales"
 }
 
 # ==============================================================================
@@ -297,6 +303,29 @@ def actualizar_bd_oai_incremental(bd_actual, dias_atras=14):
                                 grado_estimado = "Pregrado"
                 
                 if not es_tesis: continue 
+
+                # 🛡️ FILTRO POR PROCEDENCIA DE ENLACE DE LA FACULTAD
+                # Juntamos el identificador del header y los dc:identifier para validar la ruta
+                urls_ficha = [url]
+                for identifier in metadata.findall('dc:identifier', NAMESPACES):
+                    if identifier.text:
+                        urls_ficha.append(identifier.text.lower())
+                
+                # Texto completo de la ficha para emergencias
+                texto_ficha = "".join([elem.text.lower() for elem in metadata.iter() if elem.text])
+
+                # Identificamos si el enlace pertenece a las colecciones nativas de la FCFM (comunidad 2250/1)
+                # O si en alguna parte de los metadatos internos la universidad dejó el rastro de la facultad.
+                es_link_fcfm = any("handle/2250/100004" in u for u in urls_ficha) or "fcfm" in texto_ficha or "físicas y matemáticas" in texto_ficha
+                
+                # 🚨 FILTRO RADICAL: Si no proviene de los canales de la facultad, se ignora inmediatamente
+                if not es_link_fcfm:
+                    continue
+
+                # 🚫 SEGUNDO ESCUDO (Anti-falsos positivos cruzados de Derecho/Economía)
+                conceptos_prohibidos = ['derecho', 'jurídico', 'jurídica', 'penal', 'tribunal', 'leyes', 'abogado', 'pacientes', 'médico', 'clínica', 'prevención de riesgos', 'plan de negocios']
+                if any(prohibido in texto_ficha for prohibido in conceptos_prohibidos):
+                    continue
                 
                 titulo_node = metadata.find('dc:title', NAMESPACES)
                 titulo = titulo_node.text.strip() if titulo_node is not None and titulo_node.text else "Tesis sin título"
@@ -470,7 +499,10 @@ def generar_html_universal(bd_actual):
                         tokens.append(token_limpio)
 
                 if 2 <= len(tokens) <= 4:
-                    compuesto = " ".join(tokens)
+                    compuesto = " ".join(tokens).lower()
+                    # 🧼 LIMPIEZA DRÁSTICA DE PARÉNTESIS INTERNOS Y CARACTERES HUÉRFANOS
+                    compuesto = compuesto.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
+                    compuesto = compuesto.strip(".,\"';:-+/*_¿?¡! ")
                     if es_concepto_valido(compuesto) and compuesto not in FRASES_PROHIBIDAS:
                         if compuesto in NORMALIZADOR_MANUAL:
                             compuesto = NORMALIZADOR_MANUAL[compuesto]
@@ -495,7 +527,10 @@ def generar_html_universal(bd_actual):
                         tokens.append(token_limpio)
                 
                 if 2 <= len(tokens) <= 4:
-                    compuesto = " ".join(tokens)
+                    compuesto = " ".join(tokens).lower()
+                    # 🧼 LIMPIEZA DRÁSTICA DE PARÉNTESIS INTERNOS Y CARACTERES HUÉRFANOS
+                    compuesto = compuesto.replace("(", "").replace(")", "").replace("[", "").replace("]", "")
+                    compuesto = compuesto.strip(".,\"';:-+/*_¿?¡! ")
                     if es_concepto_valido(compuesto) and compuesto not in FRASES_PROHIBIDAS:
                         conceptos_tesis.append(compuesto)
             

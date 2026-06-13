@@ -56,7 +56,7 @@ def llenar_base_historica(archivo_json="bd_tesis.json"):
                 # A. Buscar el enlace oficial (handle)
                 url = None
                 for identifier in metadata.findall('dc:identifier', NAMESPACES):
-                    if identifier.text and "handle/2250/" in identifier.text:
+                    if identifier.text and "handle/2250/100004" in identifier.text:
                         url = identifier.text.strip()
                         break
                         
