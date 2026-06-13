@@ -34,10 +34,16 @@ jobs:
     - name: 💾 Guardar base de datos actualizada en el repositorio
       run: |
         git config --global user.name "GitHub Action Bot"
-        git config --global user.email "action@github.com"
-        git add bd_tesis.json
-        # Comprueba si hay cambios en el JSON; si los hay, los guarda permanentemente
-        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 BD Actualizada automáticamente por el Scraper" && git push)
+        git config --global user.email "actions@github.com"
+        git add mapa.html bd_tesis.json
+        
+        # 🛡️ Solo hace commit si detecta que realmente hay archivos modificados
+        if [ -n "$(git status --porcelain)" ]; then
+          git commit -m "Automatización: Actualiza mapa y datos en la nube"
+          git push
+        else
+          echo "No se detectaron cambios nuevos. Saltando commit para evitar errores."
+        fi
 
     - name: 🚀 Publicar nueva versión en GitHub Pages
       uses: peaceiris/actions-gh-pages@v4 # 🟢 ACTUALIZADO: Usamos la v4 que es más estable
