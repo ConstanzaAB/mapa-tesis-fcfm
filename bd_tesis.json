@@ -63978,5 +63978,19 @@
     "anio": "2016",
     "grado": "Postgrado",
     "titulo": "Balance comparativo de volumen de edificios volcanicos en la zona volcánica sur"
+  },
+  "https://repositorio.uchile.cl/handle/2250/104758": {
+    "texto": "Ingeniería . Intercambiador . calor . Inercia . térmico . tierra . calefacción . climatización . confort",
+    "origen": "Metadatos",
+    "anio": "2012",
+    "grado": "Pregrado",
+    "titulo": "Diseño de un intercambiador de calor aire-tierra para generar calefacción y climatización de edificios en Santiago"
+  },
+  "https://repositorio.uchile.cl/handle/2250/214330": {
+    "texto": "La isla de Rapa Nui enfrenta una disminución de sus precipitaciones y una creciente demanda de agua dulce, por lo que comprender su vulnerabilidad al cambio climático es fundamental para una gestión sostenible del recurso hídrico.\r\nEn esta isla se ubica el cráter del volcán Rano Raraku, el cual albergó un humedal hasta 2019, pero que actualmente se encuentra seco. Este estudio establece una línea de base para evaluar si la disminución reciente del nivel de agua constituye un evento anómalo o si forma parte de la variabilidad climática natural, comparando su evolución en el último siglo con los principales cambios ocurridos a lo largo de los últimos 11700 años.\r\nPara ello, se evaluó la representatividad del reanálisis ERA5 aplicado a la isla de Rapa Nui, se analizó la relación entre el clima local de la isla y los patrones climáticos de gran escala, y se estimaron niveles teóricos del lago desde el Último Máximo Glacial hasta el presente. Asimismo, se recopiló información instrumental y documental sobre las variaciones del nivel de agua en el último siglo. Con estos antecedentes, se simularon las fluctuaciones del lago en cuatro periodos de interés: el Último Máximo Glacial (23-19 cal kyr BP), el Holoceno Medio (6.5-5.5 cal kyr BP), el periodo reciente sin el efecto de la megasequía (1964-2009) y el mismo periodo considerando su influencia (1964-2024). Los resultados muestran niveles promedio simulados de 14.45 m, 2.36 m, 2.93 m y 2.59 m, respectivamente, en concordancia con los niveles observados y los esperados según registros paleoclimáticos.\r\nDe este modo, esta investigación sugiere que la sequía actual, si bien no es inédita, responde a causas particulares. En específico, estaría vinculada a un fenómeno climático de gran escala, la fase fría de la Oscilación Decadal del Pacífico (PDO), que ha provocado una sequía meteorológica sostenida en los últimos 15 años, intensificada y prolongada por forzantes antrópicas. Además, el libre tránsito de ganado en la cuenca genera un estrés hídrico adicional que es necesario mitigar urgentemente.\r\nSi bien las medidas de mitigación podrían resultar insuficientes para restaurar completamente el ecosistema, considerando que las proyecciones muestran que en Rapa Nui las sequías serán más frecuentes e intensas a corto y largo plazo, son sumamente necesarias para no empeorar el estado actual. No obstante, a escala geológica, es probable que Rano Raraku vuelva a albergar un cuerpo de agua en el futuro.",
+    "origen": "Resumen",
+    "anio": "2026",
+    "grado": "Pregrado",
+    "titulo": "Modelamiento hidrológico del humedal Rano Raraku: implicancias paleohidrológicas durante el holoceno"
   }
 }
